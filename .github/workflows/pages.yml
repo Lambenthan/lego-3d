@@ -1,0 +1,50 @@
+name: Publish LEGO 3D
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: pages
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RUNTIME_TAG: runtime-20261107-clips
+      RUNTIME_SHA256: 35c4e315bccc70edfcfc148f96b4413e95c1d6a235a4ed84bd0beb49d4d1a11a
+    steps:
+      - name: Download reviewed static runtime
+        run: gh release download "$RUNTIME_TAG" --repo "$GITHUB_REPOSITORY" --pattern "site.tar.gz" --dir "$RUNNER_TEMP/runtime"
+      - name: Verify archive and extract website
+        run: |
+          printf "%s  %s\n" "$RUNTIME_SHA256" "$RUNNER_TEMP/runtime/site.tar.gz" | sha256sum --check --status
+          mkdir -p site
+          tar -xzf "$RUNNER_TEMP/runtime/site.tar.gz" -C site
+          python3 - <<'PYCODE'
+          from pathlib import Path
+          root = Path('site')
+          assert not any(p.is_symlink() for p in root.rglob('*'))
+          files = [p for p in root.rglob('*') if p.is_file()]
+          size = sum(p.stat().st_size for p in files)
+          assert size < 1_000_000_000, size
+          assert len(list((root / 'ldraw/compiled').glob('*.json.gz'))) == 1819
+          assert not (root / 'ldraw/models').exists()
+          print(f'Reviewed website: {len(files)} files, {size} bytes')
+          PYCODE
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: site
+          retention-days: 1
+      - name: Deploy website
+        id: deployment
+        uses: actions/deploy-pages@v4
